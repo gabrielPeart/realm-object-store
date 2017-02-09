@@ -88,6 +88,7 @@ struct TestContext {
     util::Any from_list(List v) { return v; }
     util::Any from_results(Results v) { return v; }
     util::Any from_object(Object v) { return v; }
+    util::Any from_table(TableRef v) { return v; }
 
     bool is_null(util::Any const& v) { return !v.has_value(); }
     util::Any null_value() { return {}; }
@@ -133,7 +134,15 @@ TEST_CASE("object") {
             {"data", PropertyType::Data},
             {"date", PropertyType::Date},
             {"object", PropertyType::Object, "link target", "", false, false, true},
-            {"array", PropertyType::Array, "array target"},
+
+            {"bool array", PropertyType::Array|PropertyType::Bool},
+            {"int array", PropertyType::Array|PropertyType::Int},
+            {"float array", PropertyType::Array|PropertyType::Float},
+            {"double array", PropertyType::Array|PropertyType::Double},
+            {"string array", PropertyType::Array|PropertyType::String},
+            {"data array", PropertyType::Array|PropertyType::Data},
+            {"date array", PropertyType::Array|PropertyType::Date},
+            {"object array", PropertyType::Array|PropertyType::Object, "array target"},
         }},
         {"link target", {
             {"value", PropertyType::Int},
@@ -144,11 +153,11 @@ TEST_CASE("object") {
             {"value", PropertyType::Int},
         }},
         {"pk after list", {
-            {"array 1", PropertyType::Array, "array target"},
+            {"array 1", PropertyType::Array|PropertyType::Object, "array target"},
             {"int 1", PropertyType::Int},
             {"pk", PropertyType::Int, "", "", true},
             {"int 2", PropertyType::Int},
-            {"array 2", PropertyType::Array, "array target"},
+            {"array 2", PropertyType::Array|PropertyType::Object, "array target"},
         }},
     };
     config.schema_version = 0;
@@ -310,7 +319,15 @@ TEST_CASE("object") {
             {"data", "olleh"s},
             {"date", Timestamp(10, 20)},
             {"object", AnyDict{{"value", 10LL}}},
-            {"array", AnyVector{AnyDict{{"value", 20LL}}}},
+
+            {"bool array", AnyVec{true, false}},
+            {"int array", AnyVec{5LL, 6LL}},
+            {"float array", AnyVec{1.1f, 2.2f}},
+            {"double array", AnyVec{3.3, 4.4}},
+            {"string array", AnyVec{"a"s, "b"s, "c"s}},
+            {"data array", AnyVec{"d"s, "e"s, "f"s}},
+            {"date array", AnyVec{}},
+            {"object array", AnyVec{AnyDict{{"value", 20LL}}}},
         }, false);
 
         auto row = obj.row();
@@ -327,7 +344,24 @@ TEST_CASE("object") {
         auto link_target = r->read_group().get_table("class_link target")->get(0);
         REQUIRE(link_target.get_int(0) == 10);
 
-        auto list = row.get_linklist(9);
+        auto check_array = [&](size_t col, auto... values) {
+            auto table = row.get_subtable(col);
+            size_t i = 0;
+            for (auto& value : {values...}) {
+                CAPTURE(i);
+                REQUIRE(i < row.get_subtable_size(col));
+                REQUIRE(value == table->get<typename std::decay<decltype(value)>::type>(0, i));
+                ++i;
+            }
+        };
+        check_array(9, true, false);
+        check_array(10, 5LL, 6LL);
+        check_array(11, 1.1f, 2.2f);
+        check_array(12, 3.3, 4.4);
+        check_array(13, StringData("a"), StringData("b"), StringData("c"));
+        check_array(14, BinaryData("d", 1), BinaryData("e", 1), BinaryData("f", 1));
+
+        auto list = row.get_linklist(16);
         REQUIRE(list->size() == 1);
         REQUIRE(list->get(0).get_int(0) == 20);
     }
@@ -342,7 +376,15 @@ TEST_CASE("object") {
             {"data", "olleh"s},
             {"date", Timestamp(10, 20)},
             {"object", AnyDict{{"value", 10LL}}},
-            {"array", AnyVector{AnyDict{{"value", 20LL}}}},
+
+            {"bool array", AnyVec{true, false}},
+            {"int array", AnyVec{5LL, 6LL}},
+            {"float array", AnyVec{1.1f, 2.2f}},
+            {"double array", AnyVec{3.3, 4.4}},
+            {"string array", AnyVec{"a"s, "b"s, "c"s}},
+            {"data array", AnyVec{"d"s, "e"s, "f"s}},
+            {"date array", AnyVec{}},
+            {"object array", AnyVec{AnyDict{{"value", 20LL}}}},
         };
 
         auto obj = create(AnyDict{
@@ -392,7 +434,15 @@ TEST_CASE("object") {
             {"data", "olleh"s},
             {"date", Timestamp(10, 20)},
             {"object", AnyDict{{"value", 10LL}}},
-            {"array", AnyVector{AnyDict{{"value", 20LL}}}},
+
+            {"bool array", AnyVec{true, false}},
+            {"int array", AnyVec{5LL, 6LL}},
+            {"float array", AnyVec{1.1f, 2.2f}},
+            {"double array", AnyVec{3.3, 4.4}},
+            {"string array", AnyVec{"a"s, "b"s, "c"s}},
+            {"data array", AnyVec{"d"s, "e"s, "f"s}},
+            {"date array", AnyVec{}},
+            {"object array", AnyVec{AnyDict{{"value", 20LL}}}},
         }, false);
         create(AnyDict{
             {"pk", 1LL},
@@ -459,7 +509,7 @@ TEST_CASE("object") {
         REQUIRE_THROWS(obj.set_property_value(d, "int", util::Any(5LL), false));
     }
 
-#if REALM_ENABLE_SYNC
+#if 0
     if (!util::EventLoop::has_implementation())
         return;
 

@@ -30,18 +30,16 @@
 #include "util/uuid.hpp"
 
 #include <realm/query_expression.hpp>
-#include <realm/util/to_string.hpp>
 
 using namespace realm;
 
-using PrimaryKey = Property::PrimaryKey;
-using Indexed = Property::Indexed;
-using Nullable = Property::Nullable;
+using PrimaryKey = Property::IsPrimary;
+using Indexed = Property::IsIndexed;
+using Nullable = Property::IsNullable;
 
 // MARK: - Utility
 
 namespace {
-
 Permission::AccessLevel extract_access_level(Object& permission, CppContext& context)
 {
     auto may_manage = permission.get_property_value<util::Any>(context, "mayManage");
@@ -58,7 +56,6 @@ Permission::AccessLevel extract_access_level(Object& permission, CppContext& con
 
     return Permission::AccessLevel::None;
 }
-
 }
 
 // MARK: - PermissionResults
@@ -70,7 +67,7 @@ Permission PermissionResults::get(size_t index)
     return {
         any_cast<std::string>(permission.get_property_value<util::Any>(context, "path")),
         extract_access_level(permission, context),
-        { any_cast<std::string>(permission.get_property_value<util::Any>(context, "userId")) }
+        {any_cast<std::string>(permission.get_property_value<util::Any>(context, "userId"))}
     };
 }
 
@@ -143,14 +140,14 @@ void Permissions::set_permission(std::shared_ptr<SyncUser> user,
     // Write the permission object.
     realm->begin_transaction();
     auto raw = Object::create<util::Any>(context, realm, *realm->schema().find("PermissionChange"), AnyDict{
-        { "id", util::uuid_string() },
-        { "createdAt", Timestamp(0, 0) },
-        { "updatedAt", Timestamp(0, 0) },
-        { "userId", permission.condition.user_id },
-        { "realmUrl", realm_url },
-        { "mayRead", permission.access != Permission::AccessLevel::None },
-        { "mayWrite", permission.access == Permission::AccessLevel::Write || permission.access == Permission::AccessLevel::Admin },
-        { "mayManage", permission.access == Permission::AccessLevel::Admin },
+        {"id", util::uuid_string()},
+        {"createdAt", Timestamp(0, 0)},
+        {"updatedAt", Timestamp(0, 0)},
+        {"userId", permission.condition.user_id},
+        {"realmUrl", realm_url},
+        {"mayRead", permission.access != Permission::AccessLevel::None},
+        {"mayWrite", permission.access == Permission::AccessLevel::Write || permission.access == Permission::AccessLevel::Admin},
+        {"mayManage", permission.access == Permission::AccessLevel::Admin},
     }, false);
     auto object = std::make_shared<NotificationWrapper<Object>>(std::move(raw));
     realm->commit_transaction();
@@ -171,17 +168,17 @@ void Permissions::set_permission(std::shared_ptr<SyncUser> user,
             return;
         }
         // Determine whether an error happened or not.
-        auto code = any_cast<long long>(status_code);
-        std::exception_ptr exc_ptr = nullptr;
-        if (code) {
+        if (auto code = any_cast<long long>(status_code)) {
             // The permission change failed because an error was returned from the server.
             auto status = object->get_property_value<util::Any>(context, "statusMessage");
-            std::string error_str = (status.has_value()
-                                     ? any_cast<std::string>(status)
-                                     : util::format("Error code: %1", code));
-            exc_ptr = std::make_exception_ptr(PermissionChangeException(error_str, code));
+            std::string error_str = status.has_value()
+                                  ? any_cast<std::string>(status)
+                                  : util::format("Error code: %1", code);
+            callback(std::make_exception_ptr(PermissionChangeException(error_str, code)));
         }
-        callback(exc_ptr);
+        else {
+          callback({});
+        }
         object.reset();
     };
     object->add_notification_callback(std::move(block));
@@ -203,17 +200,17 @@ SharedRealm Permissions::management_realm(std::shared_ptr<SyncUser> user, const 
     Realm::Config config = make_config(user, std::move(realm_url));
     config.sync_config->stop_policy = SyncSessionStopPolicy::Immediately;
     config.schema = Schema{
-        { "PermissionChange", {
-            Property::make("id", PropertyType::String, PrimaryKey::yes, Indexed::yes, Nullable::no),
-            Property::make("createdAt", PropertyType::Date, PrimaryKey::no, Indexed::no, Nullable::no),
-            Property::make("updatedAt", PropertyType::Date, PrimaryKey::no, Indexed::no, Nullable::no),
-            Property::make("statusCode", PropertyType::Int, PrimaryKey::no, Indexed::no, Nullable::yes),
-            Property::make("statusMessage", PropertyType::String, PrimaryKey::no, Indexed::no, Nullable::yes),
-            Property::make("userId", PropertyType::String, PrimaryKey::no, Indexed::no, Nullable::no),
-            Property::make("realmUrl", PropertyType::String, PrimaryKey::no, Indexed::no, Nullable::no),
-            Property::make("mayRead", PropertyType::Bool, PrimaryKey::no, Indexed::no, Nullable::yes),
-            Property::make("mayWrite", PropertyType::Bool, PrimaryKey::no, Indexed::no, Nullable::yes),
-            Property::make("mayManage", PropertyType::Bool, PrimaryKey::no, Indexed::no, Nullable::yes),
+        {"PermissionChange", {
+            Property{"id",            PropertyType::String, "", "", PrimaryKey{true},  Indexed{true},  Nullable{false}},
+            Property{"createdAt",     PropertyType::Date, "", "",   PrimaryKey{false}, Indexed{false}, Nullable{false}},
+            Property{"updatedAt",     PropertyType::Date, "", "",   PrimaryKey{false}, Indexed{false}, Nullable{false}},
+            Property{"statusCode",    PropertyType::Int, "", "",    PrimaryKey{false}, Indexed{false}, Nullable{true}},
+            Property{"statusMessage", PropertyType::String, "", "", PrimaryKey{false}, Indexed{false}, Nullable{true}},
+            Property{"userId",        PropertyType::String, "", "", PrimaryKey{false}, Indexed{false}, Nullable{false}},
+            Property{"realmUrl",      PropertyType::String, "", "", PrimaryKey{false}, Indexed{false}, Nullable{false}},
+            Property{"mayRead",       PropertyType::Bool, "", "",   PrimaryKey{false}, Indexed{false}, Nullable{true}},
+            Property{"mayWrite",      PropertyType::Bool, "", "",   PrimaryKey{false}, Indexed{false}, Nullable{true}},
+            Property{"mayManage",     PropertyType::Bool, "", "",   PrimaryKey{false}, Indexed{false}, Nullable{true}},
         }}
     };
     config.schema_version = 0;
@@ -229,13 +226,13 @@ SharedRealm Permissions::permission_realm(std::shared_ptr<SyncUser> user, const 
     Realm::Config config = make_config(user, std::move(realm_url));
     config.sync_config->stop_policy = SyncSessionStopPolicy::Immediately;
     config.schema = Schema{
-        { "Permission", {
-            Property::make("updatedAt", PropertyType::Date),
-            Property::make("userId", PropertyType::String),
-            Property::make("path", PropertyType::String),
-            Property::make("mayRead", PropertyType::Bool),
-            Property::make("mayWrite", PropertyType::Bool),
-            Property::make("mayManage", PropertyType::Bool),
+        {"Permission", {
+            {"updatedAt", PropertyType::Date},
+            {"userId", PropertyType::String},
+            {"path", PropertyType::String},
+            {"mayRead", PropertyType::Bool},
+            {"mayWrite", PropertyType::Bool},
+            {"mayManage", PropertyType::Bool},
         }}
     };
     config.schema_version = 0;

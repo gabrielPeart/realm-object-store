@@ -96,19 +96,41 @@ void add_index(Table& table, size_t col)
     }
 }
 
+DataType to_core_type(PropertyType type)
+{
+    switch (type) {
+        case PropertyType::Int:    return type_Int;
+        case PropertyType::Bool:   return type_Bool;
+        case PropertyType::Float:  return type_Float;
+        case PropertyType::Double: return type_Double;
+        case PropertyType::String: return type_String;
+        case PropertyType::Date:   return type_Timestamp;
+        case PropertyType::Data:   return type_Binary;
+        case PropertyType::Object: return type_Link;
+        default: REALM_TERMINATE("bad type");
+    }
+}
+
 void insert_column(Group& group, Table& table, Property const& property, size_t col_ndx)
 {
     // Cannot directly insert a LinkingObjects column (a computed property).
     // LinkingObjects must be an artifact of an existing link column.
     REALM_ASSERT(property.type != PropertyType::LinkingObjects);
 
-    if (property.type == PropertyType::Object || property.type == PropertyType::Array) {
+    if (property.type == PropertyType::Object) {
         auto target_name = ObjectStore::table_name_for_object_type(property.object_type);
         TableRef link_table = group.get_or_add_table(target_name);
-        table.insert_column_link(col_ndx, DataType(property.type), property.name, *link_table);
+        table.insert_column_link(col_ndx, is_array(property.type) ? type_LinkList : type_Link,
+                                 property.name, *link_table);
+    }
+    else if (is_array(property.type)) {
+        DescriptorRef desc;
+        table.insert_column(col_ndx, type_Table, property.name, &desc);
+        desc->add_column(to_core_type(property.type & ~PropertyType::Flags), "value",
+                         nullptr, property.is_nullable);
     }
     else {
-        table.insert_column(col_ndx, DataType(property.type), property.name, property.is_nullable);
+        table.insert_column(col_ndx, to_core_type(property.type), property.name, property.is_nullable);
         if (property.requires_index())
             add_index(table, col_ndx);
     }

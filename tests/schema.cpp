@@ -149,7 +149,7 @@ TEST_CASE("ObjectSchema") {
         REQUIRE_PROPERTY("date", Date, "", "", false, false, false);
 
         REQUIRE_PROPERTY("object", Object, "target", "", false, false, true);
-        REQUIRE_PROPERTY("array", Array, "target", "", false, false, false);
+        REQUIRE_PROPERTY("array", Array|PropertyType::Object, "target", "", false, false, false);
 
         REQUIRE_PROPERTY("int?", Int, "", "", false, false, true);
         REQUIRE_PROPERTY("bool?", Bool, "", "", false, false, true);
@@ -188,7 +188,7 @@ TEST_CASE("Schema") {
         SECTION("rejects array properties with no target object") {
             Schema schema = {
                 {"object", {
-                    {"array", PropertyType::Array, "", "", false, false, true}
+                    {"array", PropertyType::Array|PropertyType::Object, "", "", false, false, true}
                 }},
             };
             REQUIRE_THROWS(schema.validate());
@@ -206,7 +206,7 @@ TEST_CASE("Schema") {
         SECTION("rejects array properties with a target not in the schema") {
             Schema schema = {
                 {"object", {
-                    {"array", PropertyType::Array, "invalid target", "", false, false, true}
+                    {"array", PropertyType::Array|PropertyType::Object, "invalid target", "", false, false, true}
                 }}
             };
             REQUIRE_THROWS(schema.validate());
@@ -246,7 +246,7 @@ TEST_CASE("Schema") {
         SECTION("rejects nullable array properties") {
             Schema schema = {
                 {"object", {
-                    {"array", PropertyType::Array, "target", "", false, false, true}
+                    {"array", PropertyType::Array|PropertyType::Object, "target", "", false, false, true}
                 }},
                 {"target", {
                     {"value", PropertyType::Int}
@@ -272,7 +272,7 @@ TEST_CASE("Schema") {
                     {"double", PropertyType::Double, "", "", false, false, false},
                     {"data", PropertyType::Data, "", "", false, false, false},
                     {"object", PropertyType::Object, "object", "", false, false, true},
-                    {"array", PropertyType::Array, "object", "", false, false, false},
+                    {"array", PropertyType::Array|PropertyType::Object, "object", "", false, false, false},
                 }}
             };
             for (auto& prop : schema.begin()->persisted_properties) {

@@ -1771,7 +1771,7 @@ TEST_CASE("results: snapshots") {
     config.schema = Schema{
         {"object", {
             {"value", PropertyType::Int},
-            {"array", PropertyType::Array, "linked to object"}
+            {"array", PropertyType::Array|PropertyType::Object, "linked to object"}
         }},
         {"linked to object", {
             {"value", PropertyType::Int}
@@ -2303,7 +2303,7 @@ TEST_CASE("aggregate") {
             {"date", PropertyType::Date, "", "", false, false, true},
         }},
         {"linking_object", {
-            {"link", PropertyType::Array, "object", "", false, false, false}
+            {"link", PropertyType::Array|PropertyType::Object, "object", "", false, false, false}
         }},
     });
 

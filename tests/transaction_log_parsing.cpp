@@ -595,7 +595,7 @@ TEST_CASE("Transaction log parsing: changeset calcuation") {
         auto r = Realm::get_shared_realm(config);
         r->update_schema({
             {"origin", {
-                {"array", PropertyType::Array, "target"}
+                {"array", PropertyType::Array|PropertyType::Object, "target"}
             }},
             {"target", {
                 {"value", PropertyType::Int}
@@ -1216,12 +1216,12 @@ TEST_CASE("Transaction log parsing: changeset calcuation") {
             {"origin", {
                 {"pk", PropertyType::Int, "", "", true, true},
                 {"link", PropertyType::Object, "target", "", false, false, true},
-                {"array", PropertyType::Array, "target"}
+                {"array", PropertyType::Array|PropertyType::Object, "target"}
             }},
             {"origin 2", {
                 {"pk", PropertyType::Int, "", "", true, true},
                 {"link", PropertyType::Object, "target", "", false, false, true},
-                {"array", PropertyType::Array, "target"}
+                {"array", PropertyType::Array|PropertyType::Object, "target"}
             }},
             {"target", {
                 {"pk", PropertyType::Int, "", "", true, true},
@@ -1922,7 +1922,7 @@ TEST_CASE("DeepChangeChecker") {
             {"int", PropertyType::Int},
             {"link1", PropertyType::Object, "table", "", false, false, true},
             {"link2", PropertyType::Object, "table", "", false, false, true},
-            {"array", PropertyType::Array, "table"}
+            {"array", PropertyType::Array|PropertyType::Object, "table"}
         }},
     });
     auto table = r->read_group().get_table("class_table");

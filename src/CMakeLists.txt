@@ -15,8 +15,8 @@ set(SOURCES
     impl/collection_notifier.cpp
     impl/list_notifier.cpp
     impl/object_notifier.cpp
+    impl/primitive_list_notifier.cpp
     impl/realm_coordinator.cpp
-    impl/results_base.cpp
     impl/results_notifier.cpp
     impl/transact_log_handler.cpp
     impl/weak_realm_notifier.cpp
@@ -51,8 +51,8 @@ set(HEADERS
     impl/external_commit_helper.hpp
     impl/list_notifier.hpp
     impl/object_notifier.hpp
+    impl/primitive_list_notifier.hpp
     impl/realm_coordinator.hpp
-    impl/results_base.hpp
     impl/results_notifier.hpp
     impl/transact_log_handler.hpp
     impl/weak_realm_notifier.hpp
@@ -71,6 +71,7 @@ set(HEADERS
     util/compiler.hpp
     util/event_loop_signal.hpp
     util/format.hpp
+    util/tagged_bool.hpp
     util/time.hpp
     util/uuid.hpp)
 

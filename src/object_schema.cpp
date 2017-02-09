@@ -25,24 +25,11 @@
 #include "util/format.hpp"
 
 #include <realm/data_type.hpp>
+#include <realm/descriptor.hpp>
 #include <realm/group.hpp>
 #include <realm/table.hpp>
 
 using namespace realm;
-
-#define ASSERT_PROPERTY_TYPE_VALUE(property, type) \
-    static_assert(static_cast<int>(PropertyType::property) == type_##type, \
-                  "PropertyType and DataType must have the same values")
-
-ASSERT_PROPERTY_TYPE_VALUE(Int, Int);
-ASSERT_PROPERTY_TYPE_VALUE(Bool, Bool);
-ASSERT_PROPERTY_TYPE_VALUE(Float, Float);
-ASSERT_PROPERTY_TYPE_VALUE(Double, Double);
-ASSERT_PROPERTY_TYPE_VALUE(Data, Binary);
-ASSERT_PROPERTY_TYPE_VALUE(Date, Timestamp);
-ASSERT_PROPERTY_TYPE_VALUE(Any, Mixed);
-ASSERT_PROPERTY_TYPE_VALUE(Object, Link);
-ASSERT_PROPERTY_TYPE_VALUE(Array, LinkList);
 
 ObjectSchema::ObjectSchema() = default;
 ObjectSchema::~ObjectSchema() = default;
@@ -61,7 +48,26 @@ ObjectSchema::ObjectSchema(std::string name, std::initializer_list<Property> per
     for (auto const& prop : persisted_properties) {
         if (prop.is_primary) {
             primary_key = prop.name;
+            break;
         }
+    }
+}
+
+PropertyType ObjectSchema::from_core_type(Descriptor const& table, size_t col)
+{
+    switch (table.get_column_type(col)) {
+        case type_Int:       return PropertyType::Int;
+        case type_Float:     return PropertyType::Float;
+        case type_Double:    return PropertyType::Double;
+        case type_Bool:      return PropertyType::Bool;
+        case type_String:    return PropertyType::String;
+        case type_Binary:    return PropertyType::Data;
+        case type_Timestamp: return PropertyType::Date;
+        case type_Mixed:     return PropertyType::Any;
+        case type_Link:      return PropertyType::Object;
+        case type_LinkList:  return PropertyType::Object | PropertyType::Array;
+        case type_Table:     return from_core_type(*table.get_subdescriptor(col), 0) | PropertyType::Array;
+        default: REALM_UNREACHABLE(); // FIXME
     }
 }
 
@@ -79,11 +85,18 @@ ObjectSchema::ObjectSchema(Group const& group, StringData name, size_t index) : 
     for (size_t col = 0; col < count; col++) {
         Property property;
         property.name = table->get_column_name(col).data();
-        property.type = (PropertyType)table->get_column_type(col);
+        property.type = from_core_type(*table->get_descriptor(), col);
         property.is_indexed = table->has_search_index(col);
-        property.is_nullable = table->is_nullable(col) || property.type == PropertyType::Object;
         property.table_column = col;
-        if (property.type == PropertyType::Object || property.type == PropertyType::Array) {
+        if (is_array(property.type)) {
+            if (property.type != PropertyType::Object)
+                property.is_nullable = table->get_subdescriptor(col)->is_nullable(0);
+        }
+        else {
+            property.is_nullable = table->is_nullable(col);
+        }
+
+        if (property.type == PropertyType::Object) {
             // set link type for objects and arrays
             ConstTableRef linkTable = table->get_link_target(col);
             property.object_type = ObjectStore::object_type_for_table_name(linkTable->get_name().data());
@@ -138,7 +151,7 @@ static void validate_property(Schema const& schema,
         exceptions.emplace_back("Property '%1.%2' of type '%3' cannot be nullable.",
                                 object_name, prop.name, string_for_property_type(prop.type));
     }
-    else if (prop.type == PropertyType::Object && !prop.is_nullable) {
+    else if (prop.type == PropertyType::Object && !prop.is_nullable && !is_array(prop.type)) {
         exceptions.emplace_back("Property '%1.%2' of type 'Object' must be nullable.", object_name, prop.name);
     }
 
@@ -171,7 +184,7 @@ static void validate_property(Schema const& schema,
                                 object_name, prop.name, string_for_property_type(prop.type));
     }
 
-    if (prop.type != PropertyType::Object && prop.type != PropertyType::Array && prop.type != PropertyType::LinkingObjects) {
+    if ((prop.type & ~PropertyType::Array) != PropertyType::Object && prop.type != PropertyType::LinkingObjects) {
         if (!prop.object_type.empty()) {
             exceptions.emplace_back("Property '%1.%2' of type '%3' cannot have an object type.",
                                     object_name, prop.name, string_for_property_type(prop.type));
@@ -197,7 +210,7 @@ static void validate_property(Schema const& schema,
                                 prop.object_type, prop.link_origin_property_name,
                                 object_name, prop.name);
     }
-    else if (origin_property->type != PropertyType::Object && origin_property->type != PropertyType::Array) {
+    else if (origin_property->type != PropertyType::Object) {
         exceptions.emplace_back("Property '%1.%2' declared as origin of linking objects property '%3.%4' is not a link",
                                 prop.object_type, prop.link_origin_property_name,
                                 object_name, prop.name);

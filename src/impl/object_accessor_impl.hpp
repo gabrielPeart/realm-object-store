@@ -28,30 +28,24 @@ using AnyDict = std::map<std::string, util::Any>;
 using AnyVector = std::vector<util::Any>;
 
 struct CppContext {
-    bool dict_has_value_for_key(util::Any& dict, const std::string &prop_name)
+    util::Optional<util::Any> value_for_property(util::Any& dict,
+                                                 const std::string &prop_name, size_t)
     {
-        return any_cast<AnyDict>(dict).count(prop_name) != 0;
+        auto const& v = any_cast<AnyDict&>(dict);
+        auto it = v.find(prop_name);
+        return it == v.end() ? util::none : util::make_optional(it->second);
     }
 
-    util::Any dict_value_for_key(util::Any& dict, const std::string &prop_name)
-    {
-        return any_cast<AnyDict>(dict).at(prop_name);
+    template<typename Func>
+    void list_enumerate(util::Any& value, Func&& fn) {
+        for (auto v : any_cast<AnyVector&>(value))
+            fn(v);
     }
 
-    size_t list_size(util::Any& v) { return any_cast<AnyVector>(v).size(); }
-    util::Any list_value_at_index(util::Any& v, size_t index)
+    util::Optional<util::Any>
+    default_value_for_property(Realm*, ObjectSchema const&, std::string const&)
     {
-        return any_cast<AnyVector>(v)[index];
-    }
-
-    bool has_default_value_for_property(Realm*, ObjectSchema const&, std::string const&)
-    {
-        return false;
-    }
-
-    util::Any default_value_for_property(Realm*, ObjectSchema const&, std::string const&)
-    {
-        return null_value();
+        return util::none;
     }
 
     Timestamp to_timestamp(util::Any& v) { return any_cast<Timestamp>(v); }
@@ -59,8 +53,8 @@ struct CppContext {
     double to_double(util::Any& v) { return any_cast<double>(v); }
     float to_float(util::Any& v) { return any_cast<float>(v); }
     long long to_long(util::Any& v) { return any_cast<long long>(v); }
-    std::string to_binary(util::Any& v) { return any_cast<std::string>(v); }
-    std::string to_string(util::Any& v) { return any_cast<std::string>(v); }
+    std::string& to_binary(util::Any& v) { return any_cast<std::string&>(v); }
+    StringData to_string(util::Any& v) { return any_cast<std::string&>(v).c_str(); }
     Mixed to_mixed(util::Any&) { throw std::logic_error("'Any' type is unsupported"); }
 
     util::Any from_binary(BinaryData v) { return std::string(v); }
@@ -71,18 +65,14 @@ struct CppContext {
     util::Any from_string(StringData v) { return std::string(v); }
     util::Any from_timestamp(Timestamp v) { return v; }
     util::Any from_list(List v) { return v; }
+    util::Any from_table(TableRef v) { return v; }
     util::Any from_results(Results v) { return v; }
     util::Any from_object(Object v) { return v; }
 
-    bool is_null(util::Any& v) { return !v.has_value(); }
+    bool is_null(util::Any const& v) { return !v.has_value(); }
     util::Any null_value() { return {}; }
 
-    size_t to_existing_object_index(SharedRealm, util::Any&)
-    {
-        REALM_TERMINATE("not implemented");
-    }
-    size_t to_object_index(SharedRealm realm, util::Any& value,
-                           std::string const& object_type, bool update)
+    size_t to_object_index(SharedRealm realm, util::Any& value, std::string const& object_type, bool update)
     {
         if (auto object = any_cast<Object>(&value)) {
             return object->row().get_index();
@@ -90,6 +80,11 @@ struct CppContext {
 
         return Object::create(*this, realm, *realm->schema().find(object_type), value, update).row().get_index();
     }
+
+    void will_change(Object const&, Property const&) {}
+    void did_change() {}
+    std::string print(util::Any) { return "not implemented"; }
+    bool allow_missing(util::Any) { return false; }
 };
 }
 

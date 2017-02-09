@@ -245,7 +245,7 @@ protected:
 public:
     bool select_descriptor(int levels, const size_t*)
     {
-        // subtables not supported
+        // FIXME: used for schema changes to subtables?
         return levels == 0;
     }
 
@@ -362,25 +362,10 @@ void adjust_ge(std::vector<size_t>& values, size_t i)
 // Extends TransactLogValidator to track changes made to LinkViews
 class TransactLogObserver : public TransactLogValidationMixin, public MarkDirtyMixin<TransactLogObserver> {
     _impl::TransactionChangeInfo& m_info;
-    _impl::CollectionChangeBuilder* m_active = nullptr;
+    _impl::CollectionChangeBuilder* m_active_list = nullptr;
+    _impl::CollectionChangeBuilder* m_active_table = nullptr;
 
-    _impl::CollectionChangeBuilder* get_change()
-    {
-        auto tbl_ndx = current_table();
-        if (!m_info.track_all && (tbl_ndx >= m_info.table_modifications_needed.size() || !m_info.table_modifications_needed[tbl_ndx]))
-            return nullptr;
-        if (m_info.tables.size() <= tbl_ndx) {
-            m_info.tables.resize(std::max(m_info.tables.size() * 2, tbl_ndx + 1));
-        }
-        return &m_info.tables[tbl_ndx];
-    }
-
-    bool need_move_info() const
-    {
-        auto tbl_ndx = current_table();
-        return m_info.track_all || (tbl_ndx < m_info.table_moves_needed.size() && m_info.table_moves_needed[tbl_ndx]);
-    }
-
+    bool m_need_move_info = false;
 
 public:
     TransactLogObserver(_impl::TransactionChangeInfo& info)
@@ -388,55 +373,91 @@ public:
 
     void mark_dirty(size_t row, size_t col)
     {
-        if (auto change = get_change())
-            change->modify(row, col);
+        if (m_active_table)
+            m_active_table->modify(row, col);
     }
 
     void parse_complete()
     {
-        for (auto& table : m_info.tables) {
+        for (auto& table : m_info.tables)
             table.parse_complete();
-        }
-        for (auto& list : m_info.lists) {
+        for (auto& list : m_info.lists)
             list.changes->clean_up_stale_moves();
+    }
+
+    bool select_table(size_t group_level_ndx, int len, size_t const* path) noexcept
+    {
+        TransactLogValidationMixin::select_table(group_level_ndx, len, path);
+        m_active_table = nullptr;
+
+        // Nested subtables currently not supported
+        if (len > 3)
+            return false;
+
+        auto tbl_ndx = current_table();
+        if (!m_info.track_all && (tbl_ndx >= m_info.table_modifications_needed.size() || !m_info.table_modifications_needed[tbl_ndx]))
+            return true;
+
+        m_need_move_info = m_info.track_all || (tbl_ndx < m_info.table_moves_needed.size() &&
+                                                m_info.table_moves_needed[tbl_ndx]);
+        if (m_info.tables.size() <= tbl_ndx)
+            m_info.tables.resize(std::max(m_info.tables.size() * 2, tbl_ndx + 1));
+        m_active_table = &m_info.tables[tbl_ndx];
+
+        if (len == 3) {
+            // Mark the cell containing the subtable as modified since selecting
+            // a table is always followed by a modification of some sort
+            size_t row = path[1];
+            size_t col = path[2];
+            mark_dirty(row, col);
+            
+            for (auto it = m_info.subtables.begin(), end = m_info.subtables.end(); it != end; ++it) {
+                if (it->table_ndx == current_table() && it->row_ndx == row && it->col_ndx == col) {
+                    m_active_table = it->changes;
+                    break;
+                }
+            }
         }
+        return true;
     }
 
     bool select_link_list(size_t col, size_t row, size_t)
     {
         mark_dirty(row, col);
 
-        m_active = nullptr;
+        m_active_list = nullptr;
         // When there are multiple source versions there could be multiple
         // change objects for a single LinkView, in which case we need to use
         // the last one
         for (auto it = m_info.lists.rbegin(), end = m_info.lists.rend(); it != end; ++it) {
             if (it->table_ndx == current_table() && it->row_ndx == row && it->col_ndx == col) {
-                m_active = it->changes;
+                m_active_list = it->changes;
                 break;
             }
+
+            // FIXME: a bunch of linklist handling needs to be updated to not falsly trigger from subtable changes
         }
         return true;
     }
 
     bool link_list_set(size_t index, size_t, size_t)
     {
-        if (m_active)
-            m_active->modify(index);
+        if (m_active_list)
+            m_active_list->modify(index);
         return true;
     }
 
     bool link_list_insert(size_t index, size_t, size_t)
     {
-        if (m_active)
-            m_active->insert(index);
+        if (m_active_list)
+            m_active_list->insert(index);
         return true;
     }
 
     bool link_list_erase(size_t index, size_t)
     {
-        if (m_active)
-            m_active->erase(index);
+        if (m_active_list)
+            m_active_list->erase(index);
         return true;
     }
 
@@ -454,22 +475,22 @@ public:
 
     bool link_list_clear(size_t old_size)
     {
-        if (m_active)
-            m_active->clear(old_size);
+        if (m_active_list)
+            m_active_list->clear(old_size);
         return true;
     }
 
     bool link_list_move(size_t from, size_t to)
     {
-        if (m_active)
-            m_active->move(from, to);
+        if (m_active_list)
+            m_active_list->move(from, to);
         return true;
     }
 
     bool insert_empty_rows(size_t row_ndx, size_t num_rows_to_insert, size_t, bool)
     {
-        if (auto change = get_change())
-            change->insert(row_ndx, num_rows_to_insert, need_move_info());
+        if (m_active_table)
+            m_active_table->insert(row_ndx, num_rows_to_insert, m_need_move_info);
         for (auto& list : m_info.lists) {
             if (list.table_ndx == current_table() && list.row_ndx >= row_ndx)
                 list.row_ndx += num_rows_to_insert;
@@ -480,8 +501,8 @@ public:
     bool erase_rows(size_t row_ndx, size_t, size_t prior_num_rows, bool unordered)
     {
         if (!unordered) {
-            if (auto change = get_change())
-                change->deletions.add(row_ndx);
+            if (m_active_table)
+                m_active_table->deletions.add(row_ndx);
             return true;
         }
         REALM_ASSERT(unordered);
@@ -501,8 +522,8 @@ public:
                 list.row_ndx = row_ndx;
         }
 
-        if (auto change = get_change())
-            change->move_over(row_ndx, last_row, need_move_info());
+        if (m_active_table)
+            m_active_table->move_over(row_ndx, last_row, m_need_move_info);
         return true;
     }
 
@@ -516,8 +537,8 @@ public:
                     list.row_ndx = row_ndx_1;
             }
         }
-        if (auto change = get_change())
-            change->swap(row_ndx_1, row_ndx_2, need_move_info());
+        if (m_active_table)
+            m_active_table->swap(row_ndx_1, row_ndx_2, m_need_move_info);
         return true;
     }
 
@@ -527,8 +548,8 @@ public:
             if (list.table_ndx == current_table() && list.row_ndx == from)
                 list.row_ndx = to;
         }
-        if (auto change = get_change())
-            change->subsume(from, to, need_move_info());
+        if (m_active_table)
+            m_active_table->subsume(from, to, m_need_move_info);
         return true;
     }
 
@@ -538,15 +559,15 @@ public:
         auto it = remove_if(begin(m_info.lists), end(m_info.lists),
                             [&](auto const& lv) { return lv.table_ndx == tbl_ndx; });
         m_info.lists.erase(it, end(m_info.lists));
-        if (auto change = get_change())
-            change->clear(std::numeric_limits<size_t>::max());
+        if (m_active_table)
+            m_active_table->clear(std::numeric_limits<size_t>::max());
         return true;
     }
 
     bool insert_column(size_t ndx, DataType, StringData, bool)
     {
-        if (auto change = get_change())
-            change->insert_column(ndx);
+        if (m_active_table)
+            m_active_table->insert_column(ndx);
         for (auto& list : m_info.lists) {
             if (list.table_ndx == current_table() && list.col_ndx >= ndx)
                 ++list.col_ndx;
@@ -584,8 +605,8 @@ public:
 
     bool move_column(size_t from, size_t to)
     {
-        if (auto change = get_change())
-            change->move_column(from, to);
+        if (m_active_table)
+            m_active_table->move_column(from, to);
         for (auto& list : m_info.lists) {
             if (list.table_ndx == current_table())
                 adjust_for_move(list.col_ndx, from, to);

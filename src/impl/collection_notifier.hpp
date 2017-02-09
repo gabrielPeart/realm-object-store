@@ -49,6 +49,7 @@ struct TransactionChangeInfo {
     std::vector<bool> table_modifications_needed;
     std::vector<bool> table_moves_needed;
     std::vector<ListChangeInfo> lists;
+    std::vector<ListChangeInfo> subtables;
     std::vector<CollectionChangeBuilder> tables;
     std::vector<std::vector<size_t>> column_indices;
     std::vector<size_t> table_indices;
@@ -191,6 +192,7 @@ protected:
     void add_changes(CollectionChangeBuilder change);
     void set_table(Table const& table);
     std::unique_lock<std::mutex> lock_target();
+    SharedGroup& source_shared_group();
 
     std::function<bool (size_t)> get_modification_checker(TransactionChangeInfo const&, Table const&);
 

@@ -54,6 +54,44 @@ ValueType Object::get_property_value(ContextType& ctx, StringData prop_name)
     return get_property_value_impl<ValueType>(ctx, property_for_name(prop_name));
 }
 
+template<typename ValueType, typename ContextType>
+static void set_field(ContextType& ctx, Table& table, size_t col, size_t row,
+                      PropertyType type, ValueType& value, bool is_default)
+{
+    if (table.is_nullable(col) && ctx.is_null(value)) {
+        table.set_null(col, row, is_default);
+        return;
+    }
+
+    switch (type) {
+        case PropertyType::Bool:
+            table.set(col, row, ctx.template unbox<bool>(value), is_default);
+            break;
+        case PropertyType::Int:
+            table.set(col, row, ctx.template unbox<int64_t>(value), is_default);
+            break;
+        case PropertyType::Float:
+            table.set(col, row, ctx.template unbox<float>(value), is_default);
+            break;
+        case PropertyType::Double:
+            table.set(col, row, ctx.template unbox<double>(value), is_default);
+            break;
+        case PropertyType::String:
+            table.set(col, row, ctx.template unbox<StringData>(value), is_default);
+            break;
+        case PropertyType::Data:
+            table.set(col, row, ctx.template unbox<BinaryData>(value), is_default);
+            break;
+        case PropertyType::Any:
+            throw std::logic_error("not supported");
+        case PropertyType::Date:
+            table.set(col, row, ctx.template unbox<Timestamp>(value), is_default);
+            break;
+        default:
+            REALM_COMPILER_HINT_UNREACHABLE();
+    }
+}
+
 template <typename ValueType, typename ContextType>
 void Object::set_property_value_impl(ContextType& ctx, const Property &property,
                                      ValueType value, bool try_update, bool is_default)
@@ -76,51 +114,26 @@ void Object::set_property_value_impl(ContextType& ctx, const Property &property,
         return;
     }
 
+    if (is_array(property.type)) {
+        List list(m_realm, *m_row.get_table(), column, m_row.get_index());
+        list.remove_all();
+        if (!ctx.is_null(value)) {
+            ContextType child_ctx(ctx, property);
+            ctx.list_enumerate(value, [&](auto&& element) {
+                list.add(child_ctx, element, try_update);
+            });
+        }
+        return;
+    }
+
     switch (property.type) {
-        case PropertyType::Bool:
-            table.set_bool(column, row, ctx.to_bool(value), is_default);
-            break;
-        case PropertyType::Int:
-            table.set_int(column, row, ctx.to_long(value), is_default);
-            break;
-        case PropertyType::Float:
-            table.set_float(column, row, ctx.to_float(value), is_default);
-            break;
-        case PropertyType::Double:
-            table.set_double(column, row, ctx.to_double(value), is_default);
-            break;
-        case PropertyType::String: {
-            auto str = ctx.to_string(value);
-            table.set_string(column, row, str, is_default);
-            break;
-        }
-        case PropertyType::Data: {
-            auto data = ctx.to_binary(value);
-            table.set_binary(column, row, BinaryData(data), is_default);
-            break;
-        }
-        case PropertyType::Any:
-            table.set_mixed(column, row, ctx.to_mixed(value), is_default);
-            break;
-        case PropertyType::Date:
-            table.set_timestamp(column, row, ctx.to_timestamp(value), is_default);
-            break;
-        case PropertyType::Object: {
+        case PropertyType::Object:
             table.set_link(column, row, ctx.to_object_index(m_realm, value, property.object_type, try_update), is_default);
             break;
-        }
-        case PropertyType::Array: {
-            LinkViewRef link_view = m_row.get_linklist(column);
-            link_view->clear();
-            if (ctx.is_null(value))
-                break;
-            ctx.list_enumerate(value, [&](auto&& element) {
-                link_view->add(ctx.to_object_index(m_realm, element, property.object_type, try_update));
-            });
-            break;
-        }
         case PropertyType::LinkingObjects:
             throw ReadOnlyPropertyException(m_object_schema->name, property.name);
+        default:
+            set_field(ctx, table, column, row, property.type & ~PropertyType::Flags, value, is_default);
     }
     ctx.did_change();
 }
@@ -135,39 +148,36 @@ ValueType Object::get_property_value_impl(ContextType& ctx, const Property &prop
         return ctx.null_value();
     }
 
+    if (is_array(property.type)) {
+        if (property.type == PropertyType::Object)
+            return ctx.box(List(m_realm, m_row.get_linklist(column)));
+        return ctx.box(List(m_realm, m_row.get_subtable(column)));
+    }
+
     switch (property.type) {
-        case PropertyType::Bool:
-            return ctx.from_bool(m_row.get_bool(column));
-        case PropertyType::Int:
-            return ctx.from_long(m_row.get_int(column));
-        case PropertyType::Float:
-            return ctx.from_float(m_row.get_float(column));
-        case PropertyType::Double:
-            return ctx.from_double(m_row.get_double(column));
-        case PropertyType::String:
-            return ctx.from_string(m_row.get_string(column));
-        case PropertyType::Data:
-            return ctx.from_binary(m_row.get_binary(column));
+        case PropertyType::Bool:   return ctx.box(m_row.get_bool(column));
+        case PropertyType::Int:    return ctx.box(m_row.get_int(column));
+        case PropertyType::Float:  return ctx.box(m_row.get_float(column));
+        case PropertyType::Double: return ctx.box(m_row.get_double(column));
+        case PropertyType::String: return ctx.box(m_row.get_string(column));
+        case PropertyType::Data:   return ctx.box(m_row.get_binary(column));
+        case PropertyType::Date:   return ctx.box(m_row.get_timestamp(column));
         case PropertyType::Any:
             throw "Any not supported";
-        case PropertyType::Date:
-            return ctx.from_timestamp(m_row.get_timestamp(column));
         case PropertyType::Object: {
             auto linkObjectSchema = m_realm->schema().find(property.object_type);
-            TableRef table = ObjectStore::table_for_object_type(m_realm->read_group(), linkObjectSchema->name);
-            return ctx.from_object(Object(m_realm, *linkObjectSchema, table->get(m_row.get_link(column))));
+            TableRef table = ObjectStore::table_for_object_type(m_realm->read_group(), property.object_type);
+            return ctx.box(Object(m_realm, *linkObjectSchema, table->get(m_row.get_link(column))));
         }
-        case PropertyType::Array:
-            return ctx.from_list(List(m_realm, m_row.get_linklist(column)));
         case PropertyType::LinkingObjects: {
             auto target_object_schema = m_realm->schema().find(property.object_type);
             auto link_property = target_object_schema->property_for_name(property.link_origin_property_name);
             TableRef table = ObjectStore::table_for_object_type(m_realm->read_group(), target_object_schema->name);
             auto tv = m_row.get_table()->get_backlink_view(m_row.get_index(), table.get(), link_property->table_column);
-            return ctx.from_results(Results(m_realm, std::move(tv)));
+            return ctx.box(Results(m_realm, std::move(tv)));
         }
+        default: REALM_UNREACHABLE();
     }
-    REALM_UNREACHABLE();
 }
 
 template<typename ValueType, typename ContextType>
@@ -207,19 +217,15 @@ Object Object::create(ContextType& ctx, SharedRealm realm,
                     table->set_string_unique(primary_prop->table_column, row_index, StringData());
             }
             else if (primary_prop->type == PropertyType::Int)
-                table->set_int_unique(primary_prop->table_column, row_index,
-                                      ctx.to_long(*primary_value));
-            else if (primary_prop->type == PropertyType::String) {
-                auto value = ctx.to_string(*primary_value);
-                table->set_string_unique(primary_prop->table_column, row_index, value);
-            }
+                table->set_unique(primary_prop->table_column, row_index,
+                                  ctx.template unbox<int64_t>(*primary_value));
             else
-                REALM_UNREACHABLE();
+                table->set_unique(primary_prop->table_column, row_index,
+                                  ctx.template unbox<StringData>(*primary_value));
         }
         else if (!try_update) {
             throw std::logic_error(util::format("Attempting to create an object of type '%1' with an existing primary key value '%2'.",
-                                                object_schema.name,
-                                                ctx.print(*primary_value)));
+                                                object_schema.name, ctx.print(*primary_value)));
         }
     }
     else {
@@ -242,8 +248,8 @@ Object Object::create(ContextType& ctx, SharedRealm realm,
 
         if (!v)
             v = ctx.default_value_for_property(realm.get(), object_schema, prop.name);
-        if ((!v || ctx.is_null(*v)) && !prop.is_nullable && prop.type != PropertyType::Array) {
-            if (!ctx.allow_missing(value))
+        if ((!v || ctx.is_null(*v)) && !prop.is_nullable && !is_array(prop.type)) {
+            if (prop.is_primary || !ctx.allow_missing(value))
                 throw MissingPropertyValueException(object_schema.name, prop.name);
         }
         if (v)
@@ -278,36 +284,16 @@ size_t Object::get_for_primary_key_impl(ContextType& ctx, Table const& table,
     if (is_null && !primary_prop.is_nullable)
         throw std::logic_error("Invalid null value for non-nullable primary key.");
     if (primary_prop.type == PropertyType::String) {
-        if (is_null)
-            return table.find_first_string(primary_prop.table_column, StringData());
-        auto primary_string = ctx.to_string(primary_value);
-        return table.find_first_string(primary_prop.table_column, primary_string);
+        return table.find_first(primary_prop.table_column,
+                                ctx.template unbox<StringData>(primary_value));
     }
-    if (is_null)
-        return table.find_first_null(primary_prop.table_column);
-    return table.find_first_int(primary_prop.table_column, ctx.to_long(primary_value));
+    if (primary_prop.is_nullable)
+        return table.find_first(primary_prop.table_column,
+                                ctx.template unbox<util::Optional<int64_t>>(primary_value));
+    return table.find_first(primary_prop.table_column,
+                            ctx.template unbox<int64_t>(primary_value));
 }
 
-//
-// List implementation
-//
-template<typename ValueType, typename ContextType>
-void List::add(ContextType& ctx, ValueType value)
-{
-    add(ctx.to_object_index(m_realm, value, get_object_schema().name, false));
-}
-
-template<typename ValueType, typename ContextType>
-void List::insert(ContextType& ctx, ValueType value, size_t list_ndx)
-{
-    insert(list_ndx, ctx.to_object_index(m_realm, value, get_object_schema().name, false));
-}
-
-template<typename ValueType, typename ContextType>
-void List::set(ContextType& ctx, ValueType value, size_t list_ndx)
-{
-    set(list_ndx, ctx.to_object_index(m_realm, value, get_object_schema().name, false));
-}
 } // namespace realm
 
-#endif /* defined(REALM_OS_OBJECT_ACCESSOR_HPP) */
+#endif // REALM_OS_OBJECT_ACCESSOR_HPP

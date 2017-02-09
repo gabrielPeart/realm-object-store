@@ -71,7 +71,7 @@ TEST_CASE("thread safe reference") {
         {"value", PropertyType::Int},
     }});
     static const ObjectSchema int_array_object({"int_array_object", {
-        {"value", PropertyType::Array, "int_object"}
+        {"value", PropertyType::Array|PropertyType::Object, "int_object"}
     }});
     r->update_schema({foo_object, string_object, int_object, int_array_object});
 
