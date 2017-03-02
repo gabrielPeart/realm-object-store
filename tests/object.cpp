@@ -40,73 +40,32 @@ using AnyDict = std::map<std::string, util::Any>;
 using AnyVec = std::vector<util::Any>;
 }
 
-struct TestContext {
+struct TestContext : CppContext {
     std::map<std::string, AnyDict> defaults;
 
-    bool dict_has_value_for_key(util::Any dict, const std::string &prop_name)
+    using CppContext::CppContext;
+
+    TestContext(TestContext& parent, realm::Property const& prop)
+    : CppContext(parent, prop)
+    , defaults(parent.defaults)
+    { }
+
+    util::Optional<util::Any>
+    default_value_for_property(Realm*, ObjectSchema const& object, std::string const& prop)
     {
-        return any_cast<AnyDict>(dict).count(prop_name) != 0;
+        auto obj_it = defaults.find(object.name);
+        if (obj_it == defaults.end())
+            return util::none;
+        auto prop_it = obj_it->second.find(prop);
+        if (prop_it == obj_it->second.end())
+            return util::none;
+        return prop_it->second;
     }
 
-    util::Any dict_value_for_key(util::Any dict, const std::string &prop_name)
-    {
-        return any_cast<AnyDict>(dict).at(prop_name);
-    }
-
-    size_t list_size(util::Any& v) { return any_cast<AnyVec>(v).size(); }
-    util::Any list_value_at_index(util::Any& v, size_t index)
-    {
-        return any_cast<AnyVec>(v)[index];
-    }
-
-    bool has_default_value_for_property(Realm*, ObjectSchema const& object, std::string const& prop)
-    {
-        auto it = defaults.find(object.name);
-        if (it != defaults.end())
-            return it->second.count(prop);
-        return false;
-    }
-
-    util::Any default_value_for_property(Realm*, ObjectSchema const& object, std::string const& prop)
-    {
-        return defaults.at(object.name).at(prop);
-    }
-
-    Timestamp to_timestamp(util::Any& v) { return any_cast<Timestamp>(v); }
-    bool to_bool(util::Any& v) { return any_cast<bool>(v); }
-    double to_double(util::Any& v) { return any_cast<double>(v); }
-    float to_float(util::Any& v) { return any_cast<float>(v); }
-    long long to_long(util::Any& v) { return any_cast<long long>(v); }
-    std::string to_binary(util::Any& v) { return any_cast<std::string>(v); }
-    std::string to_string(util::Any& v) { return any_cast<std::string>(v); }
-    Mixed to_mixed(util::Any&) { throw std::logic_error("'Any' type is unsupported"); }
-
-    util::Any from_binary(BinaryData v) { return std::string(v); }
-    util::Any from_bool(bool v) { return v; }
-    util::Any from_double(double v) { return v; }
-    util::Any from_float(float v) { return v; }
-    util::Any from_long(long long v) { return v; }
-    util::Any from_string(StringData v) { return std::string(v); }
-    util::Any from_timestamp(Timestamp v) { return v; }
-    util::Any from_list(List v) { return v; }
-    util::Any from_results(Results v) { return v; }
-    util::Any from_object(Object v) { return v; }
-
-    bool is_null(util::Any& v) { return !v.has_value(); }
-    util::Any null_value() { return {}; }
-
-    size_t to_existing_object_index(SharedRealm, util::Any &)
-    {
-        REALM_TERMINATE("not implemented");
-    }
-    size_t to_object_index(SharedRealm realm, util::Any& value, std::string const& object_type, bool update)
-    {
-        if (auto object = any_cast<Object>(&value)) {
-            return object->row().get_index();
-        }
-
-        return Object::create(*this, realm, *realm->schema().find(object_type), value, update).row().get_index();
-    }
+    void will_change(Object const&, Property const&) {}
+    void did_change() {}
+    std::string print(util::Any) { return "not implemented"; }
+    bool allow_missing(util::Any) { return false; }
 };
 
 TEST_CASE("object") {
@@ -289,7 +248,7 @@ TEST_CASE("object") {
         }
     }
 
-    TestContext d;
+    TestContext d(r);
     auto create = [&](util::Any&& value, bool update) {
         r->begin_transaction();
         auto obj = Object::create(d, r, *r->schema().find("all types"), value, update);
@@ -468,10 +427,6 @@ TEST_CASE("object") {
     config2.schema = config.schema;
 
     SECTION("defaults do not override values explicitly passed to create()") {
-        d.defaults["pk after list"] = {
-            {"int 1", 10LL},
-            {"int 2", 10LL},
-        };
         AnyDict v1{
             {"pk", 7LL},
             {"array 1", AnyVector{AnyDict{{"value", 1LL}}}},
@@ -484,10 +439,19 @@ TEST_CASE("object") {
         auto r1 = Realm::get_shared_realm(config1);
         auto r2 = Realm::get_shared_realm(config2);
 
+        TestContext c1(r1);
+        TestContext c2(r2);
+
+        c1.defaults["pk after list"] = {
+            {"int 1", 10LL},
+            {"int 2", 10LL},
+        };
+        c2.defaults = c1.defaults;
+
         r1->begin_transaction();
         r2->begin_transaction();
-        auto obj = Object::create(d, r1, *r1->schema().find("pk after list"), util::Any(v1), false);
-        Object::create(d, r2, *r2->schema().find("pk after list"), util::Any(v2), false);
+        auto obj = Object::create(c1, r1, *r1->schema().find("pk after list"), util::Any(v1), false);
+        Object::create(c2, r2, *r2->schema().find("pk after list"), util::Any(v2), false);
         r2->commit_transaction();
         r1->commit_transaction();
 

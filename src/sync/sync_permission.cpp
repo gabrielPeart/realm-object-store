@@ -30,7 +30,6 @@
 #include "util/uuid.hpp"
 
 #include <realm/query_expression.hpp>
-#include <realm/util/to_string.hpp>
 
 using namespace realm;
 
@@ -41,7 +40,6 @@ using Nullable = Property::Nullable;
 // MARK: - Utility
 
 namespace {
-
 Permission::AccessLevel extract_access_level(Object& permission, CppContext& context)
 {
     auto may_manage = permission.get_property_value<util::Any>(context, "mayManage");
@@ -58,7 +56,6 @@ Permission::AccessLevel extract_access_level(Object& permission, CppContext& con
 
     return Permission::AccessLevel::None;
 }
-
 }
 
 // MARK: - PermissionResults
@@ -70,7 +67,7 @@ Permission PermissionResults::get(size_t index)
     return {
         any_cast<std::string>(permission.get_property_value<util::Any>(context, "path")),
         extract_access_level(permission, context),
-        { any_cast<std::string>(permission.get_property_value<util::Any>(context, "userId")) }
+        {any_cast<std::string>(permission.get_property_value<util::Any>(context, "userId"))}
     };
 }
 
@@ -164,24 +161,26 @@ void Permissions::set_permission(std::shared_ptr<SyncUser> user,
             object.reset();
             return;
         }
+
         CppContext context;
         auto status_code = object->get_property_value<util::Any>(context, "statusCode");
         if (!status_code.has_value()) {
             // Continue waiting for the sync server to complete the operation.
             return;
         }
+
         // Determine whether an error happened or not.
-        auto code = any_cast<long long>(status_code);
-        std::exception_ptr exc_ptr = nullptr;
-        if (code) {
+        if (auto code = any_cast<long long>(status_code)) {
             // The permission change failed because an error was returned from the server.
             auto status = object->get_property_value<util::Any>(context, "statusMessage");
-            std::string error_str = (status.has_value()
-                                     ? any_cast<std::string>(status)
-                                     : util::format("Error code: %1", code));
-            exc_ptr = std::make_exception_ptr(PermissionChangeException(error_str, code));
+            std::string error_str = status.has_value()
+                                  ? any_cast<std::string>(status)
+                                  : util::format("Error code: %1", code);
+            callback(std::make_exception_ptr(PermissionChangeException(error_str, code)));
         }
-        callback(exc_ptr);
+        else {
+            callback({});
+        }
         object.reset();
     };
     object->add_notification_callback(std::move(block));
