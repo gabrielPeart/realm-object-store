@@ -46,17 +46,17 @@ public:
 
     // property getter/setter
     template<typename ValueType, typename ContextType>
-    void set_property_value(ContextType& ctx, std::string prop_name,
+    void set_property_value(ContextType& ctx, StringData prop_name,
                             ValueType value, bool try_update);
 
     template<typename ValueType, typename ContextType>
-    ValueType get_property_value(ContextType& ctx, std::string prop_name);
+    ValueType get_property_value(ContextType& ctx, StringData prop_name);
 
     // create an Object from a native representation
     template<typename ValueType, typename ContextType>
     static Object create(ContextType& ctx, SharedRealm realm,
                          const ObjectSchema &object_schema, ValueType value,
-                         bool try_update);
+                         bool try_update, Row* = nullptr);
 
     template<typename ValueType, typename ContextType>
     static Object get_for_primary_key(ContextType& ctx, SharedRealm realm,
@@ -88,7 +88,7 @@ private:
                                            const Property &primary_prop, ValueType primary_value);
 
     void verify_attached() const;
-    Property const& property_for_name(std::string const& prop_name) const;
+    Property const& property_for_name(StringData prop_name) const;
 };
 
 struct InvalidatedObjectException : public std::logic_error {

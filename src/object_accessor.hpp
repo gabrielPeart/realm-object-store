@@ -36,11 +36,8 @@
 #include <string>
 
 namespace realm {
-//
-// template method implementations
-//
 template <typename ValueType, typename ContextType>
-void Object::set_property_value(ContextType& ctx, std::string prop_name, ValueType value, bool try_update)
+void Object::set_property_value(ContextType& ctx, StringData prop_name, ValueType value, bool try_update)
 {
     verify_attached();
     m_realm->verify_in_write();
@@ -52,14 +49,17 @@ void Object::set_property_value(ContextType& ctx, std::string prop_name, ValueTy
 }
 
 template <typename ValueType, typename ContextType>
-ValueType Object::get_property_value(ContextType& ctx, std::string prop_name)
+ValueType Object::get_property_value(ContextType& ctx, StringData prop_name)
 {
     return get_property_value_impl<ValueType>(ctx, property_for_name(prop_name));
 }
 
 template <typename ValueType, typename ContextType>
-void Object::set_property_value_impl(ContextType& ctx, const Property &property, ValueType value, bool try_update, bool is_default)
+void Object::set_property_value_impl(ContextType& ctx, const Property &property,
+                                     ValueType value, bool try_update, bool is_default)
 {
+    ctx.will_change(*this, property);
+
     auto& table = *m_row.get_table();
     size_t column = property.table_column;
     size_t row = m_row.get_index();
@@ -71,6 +71,8 @@ void Object::set_property_value_impl(ContextType& ctx, const Property &property,
         else {
             table.set_null(column, row, is_default);
         }
+
+        ctx.did_change();
         return;
     }
 
@@ -110,18 +112,17 @@ void Object::set_property_value_impl(ContextType& ctx, const Property &property,
         case PropertyType::Array: {
             LinkViewRef link_view = m_row.get_linklist(column);
             link_view->clear();
-            if (!ctx.is_null(value)) {
-                size_t count = ctx.list_size(value);
-                for (size_t i = 0; i < count; i++) {
-                    ValueType element = ctx.list_value_at_index(value, i);
-                    link_view->add(ctx.to_object_index(m_realm, element, property.object_type, try_update));
-                }
-            }
+            if (ctx.is_null(value))
+                break;
+            ctx.list_enumerate(value, [&](auto&& element) {
+                link_view->add(ctx.to_object_index(m_realm, element, property.object_type, try_update));
+            });
             break;
         }
         case PropertyType::LinkingObjects:
             throw ReadOnlyPropertyException(m_object_schema->name, property.name);
     }
+    ctx.did_change();
 }
 
 template <typename ValueType, typename ContextType>
@@ -170,7 +171,9 @@ ValueType Object::get_property_value_impl(ContextType& ctx, const Property &prop
 }
 
 template<typename ValueType, typename ContextType>
-Object Object::create(ContextType& ctx, SharedRealm realm, const ObjectSchema &object_schema, ValueType value, bool try_update)
+Object Object::create(ContextType& ctx, SharedRealm realm,
+                      ObjectSchema const& object_schema, ValueType value,
+                      bool try_update, Row* out_row)
 {
     realm->verify_in_write();
 
@@ -179,27 +182,44 @@ Object Object::create(ContextType& ctx, SharedRealm realm, const ObjectSchema &o
 
     // try to get existing row if updating
     size_t row_index = realm::not_found;
-    realm::TableRef table = ObjectStore::table_for_object_type(realm->read_group(), object_schema.name);
+    TableRef table = ObjectStore::table_for_object_type(realm->read_group(), object_schema.name);
 
     if (auto primary_prop = object_schema.primary_key_property()) {
         // search for existing object based on primary key type
-        ValueType primary_value = ctx.dict_value_for_key(value, object_schema.primary_key);
-        row_index = get_for_primary_key_impl(ctx, *table, *primary_prop, primary_value);
+        auto primary_value = ctx.value_for_property(value, primary_prop->name,
+                                                    primary_prop - &object_schema.persisted_properties[0]);
+        if (!primary_value)
+            primary_value = ctx.default_value_for_property(realm.get(), object_schema, primary_prop->name);
+        if (!primary_value) {
+            if (!primary_prop->is_nullable)
+                throw MissingPropertyValueException(object_schema.name, primary_prop->name);
+            primary_value = ctx.null_value();
+        }
+        row_index = get_for_primary_key_impl(ctx, *table, *primary_prop, *primary_value);
 
         if (row_index == realm::not_found) {
             row_index = table->add_empty_row();
             created = true;
-            if (primary_prop->type == PropertyType::Int)
-                table->set_int_unique(primary_prop->table_column, row_index, ctx.to_long(primary_value));
+            if (ctx.is_null(*primary_value)) {
+                if (primary_prop->type == PropertyType::Int)
+                    table->set_null_unique(primary_prop->table_column, row_index);
+                else
+                    table->set_string_unique(primary_prop->table_column, row_index, StringData());
+            }
+            else if (primary_prop->type == PropertyType::Int)
+                table->set_int_unique(primary_prop->table_column, row_index,
+                                      ctx.to_long(*primary_value));
             else if (primary_prop->type == PropertyType::String) {
-                auto value = ctx.to_string(primary_value);
+                auto value = ctx.to_string(*primary_value);
                 table->set_string_unique(primary_prop->table_column, row_index, value);
             }
             else
                 REALM_UNREACHABLE();
         }
         else if (!try_update) {
-            throw std::logic_error(util::format("Attempting to create an object of type '%1' with an existing primary key value.", object_schema.name));
+            throw std::logic_error(util::format("Attempting to create an object of type '%1' with an existing primary key value '%2'.",
+                                                object_schema.name,
+                                                ctx.print(*primary_value)));
         }
     }
     else {
@@ -209,31 +229,33 @@ Object Object::create(ContextType& ctx, SharedRealm realm, const ObjectSchema &o
 
     // populate
     Object object(realm, object_schema, table->get(row_index));
-    for (const Property& prop : object_schema.persisted_properties) {
+    if (out_row)
+        *out_row = object.row();
+    for (size_t i = 0; i < object_schema.persisted_properties.size(); ++i) {
+        auto& prop = object_schema.persisted_properties[i];
         if (prop.is_primary)
             continue;
 
-        if (ctx.dict_has_value_for_key(value, prop.name)) {
-            object.set_property_value_impl(ctx, prop, ctx.dict_value_for_key(value, prop.name), try_update);
-        }
-        else if (created) {
-            if (ctx.has_default_value_for_property(realm.get(), object_schema, prop.name)) {
-                object.set_property_value_impl(ctx, prop, ctx.default_value_for_property(realm.get(), object_schema, prop.name), try_update, true);
-            }
-            else if (prop.is_nullable || prop.type == PropertyType::Array) {
-                object.set_property_value_impl(ctx, prop, ctx.null_value(), try_update);
-            }
-            else {
+        auto v = ctx.value_for_property(value, prop.name, i);
+        if (!created && !v)
+            continue;
+
+        if (!v)
+            v = ctx.default_value_for_property(realm.get(), object_schema, prop.name);
+        if ((!v || ctx.is_null(*v)) && !prop.is_nullable && prop.type != PropertyType::Array) {
+            if (!ctx.allow_missing(value))
                 throw MissingPropertyValueException(object_schema.name, prop.name);
-            }
         }
+        if (v)
+            object.set_property_value_impl(ctx, prop, *v, try_update);
     }
     return object;
 }
 
 template<typename ValueType, typename ContextType>
 Object Object::get_for_primary_key(ContextType& ctx, SharedRealm realm,
-                                   const ObjectSchema &object_schema, ValueType primary_value)
+                                   const ObjectSchema &object_schema,
+                                   ValueType primary_value)
 {
     auto primary_prop = object_schema.primary_key_property();
     if (!primary_prop) {
@@ -241,6 +263,8 @@ Object Object::get_for_primary_key(ContextType& ctx, SharedRealm realm,
     }
 
     auto table = ObjectStore::table_for_object_type(realm->read_group(), object_schema.name);
+    if (!table)
+        return Object(realm, object_schema, Row());
     auto row_index = get_for_primary_key_impl(ctx, *table, *primary_prop, primary_value);
 
     return Object(realm, object_schema, row_index == realm::not_found ? Row() : table->get(row_index));
@@ -248,14 +272,20 @@ Object Object::get_for_primary_key(ContextType& ctx, SharedRealm realm,
 
 template<typename ValueType, typename ContextType>
 size_t Object::get_for_primary_key_impl(ContextType& ctx, Table const& table,
-                                        const Property &primary_prop, ValueType primary_value) {
+                                        const Property &primary_prop,
+                                        ValueType primary_value) {
+    bool is_null = ctx.is_null(primary_value);
+    if (is_null && !primary_prop.is_nullable)
+        throw std::logic_error("Invalid null value for non-nullable primary key.");
     if (primary_prop.type == PropertyType::String) {
+        if (is_null)
+            return table.find_first_string(primary_prop.table_column, StringData());
         auto primary_string = ctx.to_string(primary_value);
         return table.find_first_string(primary_prop.table_column, primary_string);
     }
-    else {
-        return table.find_first_int(primary_prop.table_column, ctx.to_long(primary_value));
-    }
+    if (is_null)
+        return table.find_first_null(primary_prop.table_column);
+    return table.find_first_int(primary_prop.table_column, ctx.to_long(primary_value));
 }
 
 //

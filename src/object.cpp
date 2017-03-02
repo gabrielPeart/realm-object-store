@@ -79,7 +79,7 @@ void Object::verify_attached() const
     }
 }
 
-Property const& Object::property_for_name(std::string const& prop_name) const
+Property const& Object::property_for_name(StringData prop_name) const
 {
     auto prop = m_object_schema->property_for_name(prop_name);
     if (!prop) {
