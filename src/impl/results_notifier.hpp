@@ -20,7 +20,7 @@
 #define REALM_RESULTS_NOTIFIER_HPP
 
 #include "collection_notifier.hpp"
-#include "results.hpp"
+#include "impl/results_base.hpp"
 
 #include <realm/group_shared.hpp>
 
@@ -28,14 +28,14 @@ namespace realm {
 namespace _impl {
 class ResultsNotifier : public CollectionNotifier {
 public:
-    ResultsNotifier(Results& target);
+    ResultsNotifier(ResultsBase& target);
 
-    void target_results_moved(Results& old_target, Results& new_target);
+    void target_results_moved(ResultsBase& old_target, ResultsBase& new_target);
 
 private:
     // Target Results to update
     // Can only be used with lock_target() held
-    Results* m_target_results;
+    ResultsBase* m_target_results;
 
     // The source Query, in handover form iff m_sg is null
     std::unique_ptr<SharedGroup::Handover<Query>> m_query_handover;

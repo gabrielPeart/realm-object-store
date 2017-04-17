@@ -18,10 +18,12 @@
 
 #include "impl/results_notifier.hpp"
 
+#include "shared_realm.hpp"
+
 using namespace realm;
 using namespace realm::_impl;
 
-ResultsNotifier::ResultsNotifier(Results& target)
+ResultsNotifier::ResultsNotifier(ResultsBase& target)
 : CollectionNotifier(target.get_realm())
 , m_target_results(&target)
 , m_target_is_in_table_order(target.is_in_table_order())
@@ -33,7 +35,7 @@ ResultsNotifier::ResultsNotifier(Results& target)
     SortDescriptor::generate_patch(target.get_distinct(), m_distinct_handover);
 }
 
-void ResultsNotifier::target_results_moved(Results& old_target, Results& new_target)
+void ResultsNotifier::target_results_moved(ResultsBase& old_target, ResultsBase& new_target)
 {
     auto lock = lock_target();
 
@@ -199,8 +201,8 @@ void ResultsNotifier::deliver(SharedGroup& sg)
 
     REALM_ASSERT(!m_query_handover);
     if (m_tv_to_deliver) {
-        Results::Internal::set_table_view(*m_target_results,
-                                          std::move(*sg.import_from_handover(std::move(m_tv_to_deliver))));
+        ResultsBase::Internal::set_table_view(*m_target_results,
+                                              std::move(*sg.import_from_handover(std::move(m_tv_to_deliver))));
     }
     REALM_ASSERT(!m_tv_to_deliver);
 }

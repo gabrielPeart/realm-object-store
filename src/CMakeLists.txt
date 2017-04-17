@@ -1,4 +1,5 @@
 set(SOURCES
+    binding_callback_thread_observer.cpp
     collection_notifications.cpp
     index_set.cpp
     list.cpp
@@ -9,12 +10,13 @@ set(SOURCES
     schema.cpp
     shared_realm.cpp
     thread_safe_reference.cpp
-    binding_callback_thread_observer.cpp
+
     impl/collection_change_builder.cpp
     impl/collection_notifier.cpp
     impl/list_notifier.cpp
     impl/object_notifier.cpp
     impl/realm_coordinator.cpp
+    impl/results_base.cpp
     impl/results_notifier.cpp
     impl/transact_log_handler.cpp
     impl/weak_realm_notifier.cpp
@@ -24,6 +26,7 @@ set(SOURCES
     util/uuid.cpp)
 
 set(HEADERS
+    binding_callback_thread_observer.hpp
     collection_notifications.hpp
     execution_context_id.hpp
     index_set.hpp
@@ -37,7 +40,6 @@ set(HEADERS
     schema.hpp
     shared_realm.hpp
     thread_safe_reference.hpp
-    binding_callback_thread_observer.hpp
 
     impl/apple/external_commit_helper.hpp
     impl/apple/keychain_helper.hpp
@@ -50,6 +52,7 @@ set(HEADERS
     impl/list_notifier.hpp
     impl/object_notifier.hpp
     impl/realm_coordinator.hpp
+    impl/results_base.hpp
     impl/results_notifier.hpp
     impl/transact_log_handler.hpp
     impl/weak_realm_notifier.hpp
